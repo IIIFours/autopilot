@@ -37,6 +37,10 @@ typedef struct {
   double ki;
   double kd;
   double bearingPositionToDestinationWaypoint;
+  double destinationLatitude;
+  double destinationLongitude;
+  double previousDestinationLatitude;
+  double previousDestinationLongitude;
   double heading;
   double xte;
   double previousXte;
@@ -75,10 +79,14 @@ Stream *OutputStream;
 void HandleNMEA2000Msg(const tN2kMsg &N2kMsg);
 
 void setup() {
-  autopilot->kp = 3.0;
-  autopilot->ki = 0.3;
-  autopilot->kd = 1.0;
+  autopilot->kp = 2.5;
+  autopilot->ki = 0.75;
+  autopilot->kd = 0.75;
   autopilot->bearingPositionToDestinationWaypoint = -1;
+  autopilot->destinationLatitude = 0;
+  autopilot->destinationLongitude = 0;
+  autopilot->previousDestinationLatitude = 0;
+  autopilot->previousDestinationLongitude = 0;
   autopilot->heading = -1;
   autopilot->xte = -1;
   autopilot->previousXte = -1;
@@ -211,6 +219,8 @@ void NavigationInfo(const tN2kMsg &N2kMsg) {
     {
       if (BearingOriginToDestinationWaypoint <= 360 && BearingPositionToDestinationWaypoint >= 0) {
         autopilot->bearingPositionToDestinationWaypoint = radiansToDegrees(BearingPositionToDestinationWaypoint);
+        autopilot->destinationLatitude = DestinationLatitude;
+        autopilot->destinationLongitude = DestinationLongitude;
       } else {
         autopilot->bearingPositionToDestinationWaypoint = -1;
       }
@@ -235,9 +245,11 @@ void HandleNMEA2000Msg(const tN2kMsg &N2kMsg) {
 }
 
 void calculateRudderAngle() {
-  // Reset integral when course is reached
-  if ((autopilot->xte > 0 && autopilot->previousXte <= 0) || (autopilot->xte < 0 && autopilot->previousXte >= 0)) {
-    autopilot->integralXTE = 0;
+  // Reset integral when course is reached or the destination changes
+  if ((autopilot->xte > 0 && autopilot->previousXte <= 0) || (autopilot->xte < 0 && autopilot->previousXte >= 0) || 
+      ((autopilot->destinationLatitude != autopilot->previousDestinationLatitude) && 
+      (autopilot->destinationLongitude != autopilot->previousDestinationLongitude))) {
+        autopilot->integralXTE = 0;
   }
 
   // Calculate heading error
@@ -268,6 +280,8 @@ void calculateRudderAngle() {
   // Clamp the rudder angle to a realistic range, e.g., -45 to 45 degrees
   autopilot->rudderAngle = constrain(rudderAngle, -45, 45);
   autopilot->previousBearing = autopilot->bearingPositionToDestinationWaypoint;
+  autopilot->previousDestinationLatitude = autopilot->destinationLatitude;
+  autopilot->previousDestinationLongitude = autopilot->destinationLongitude;
 }
 
 //*****************************************************************************
@@ -308,7 +322,7 @@ void loop()
 
   calculateRudderAngle();
 
-  autopilot->targetMotorPosition = map(autopilot->rudderAngle, -45, 45, -1140, -160);
+  autopilot->targetMotorPosition = map(autopilot->rudderAngle, -45, 45, -1050, -70);
   rudderStepper.moveTo(autopilot->targetMotorPosition);
   while (rudderStepper.distanceToGo() != 0) {
     rudderStepper.run();
@@ -323,6 +337,10 @@ void loop()
   Serial.println(autopilot->ki);
   Serial.print("kd: ");
   Serial.println(autopilot->kd);
+  Serial.print("destinationLatitude: ");
+  Serial.println(autopilot->destinationLatitude);
+  Serial.print("destinationLongitude: ");
+  Serial.println(autopilot->destinationLongitude);
   Serial.print("bearingPositionToDestinationWaypoint: ");
   Serial.println(autopilot->bearingPositionToDestinationWaypoint);
   Serial.print("heading: ");
