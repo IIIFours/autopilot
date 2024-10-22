@@ -111,6 +111,8 @@ void setup() {
           
   OutputStream=&Serial;
 
+  Serial2.begin(9600);
+
   NMEA2000.SetDeviceCount(1);
   NMEA2000.SetProductInformation("123434", // Manufacturer's Model serial code. 
                                  444, // Manufacturer's product code
@@ -295,6 +297,7 @@ void loop()
 
   if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
     Serial.println("Autopilot off: no bearing or xte");
+    Serial2.println("OFF");
     // Disable motor power
     digitalWrite(4, HIGH);
     // Reset homing
