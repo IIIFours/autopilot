@@ -305,44 +305,45 @@ void loop()
   autopilot->timeDelta = (currentTime - autopilot->previousTime) / 1000.0;  // Convert ms to seconds
   autopilot->previousTime = currentTime;
 
-  // if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
-  //   Serial.println("Autopilot off: no bearing or xte");
-  //   Serial2.println("OFF");
-  //   // Disable motor power
-  //   digitalWrite(4, HIGH);
-  //   // Reset homing
-  //   autopilot->homingComplete = false;
-  //   return;
-  // }
+  sendAutopilotData(autopilot);
 
-  // // Enable motor power
-  // digitalWrite(4, LOW);
+  if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
+    Serial.println("Autopilot off: no bearing or xte");
+    // Disable motor power
+    digitalWrite(4, HIGH);
+    // Reset homing
+    autopilot->homingComplete = false;
+    return;
+  }
 
-  // if (!autopilot->homingComplete) {
-  //   rudderStepper.setCurrentPosition(0);
-  //   int currentPosition = 0;
-  //   while(digitalRead(3) == LOW) {
-  //     Serial.println("Homing...");
-  //     rudderStepper.move(currentPosition += 1);
-  //     rudderStepper.runToPosition();
-  //     Serial.println(currentPosition);
-  //   }
-  //   rudderStepper.stop();
-  //   autopilot->homingComplete = true;
-  //   rudderStepper.setCurrentPosition(0);
-  //   Serial.println("Homing complete");
-  // }
+  // Enable motor power
+  digitalWrite(4, LOW);
 
-  // calculateRudderAngle();
+  if (!autopilot->homingComplete) {
+    rudderStepper.setCurrentPosition(0);
+    int currentPosition = 0;
+    while(digitalRead(3) == LOW) {
+      Serial.println("Homing...");
+      rudderStepper.move(currentPosition += 1);
+      rudderStepper.runToPosition();
+      Serial.println(currentPosition);
+    }
+    rudderStepper.stop();
+    autopilot->homingComplete = true;
+    rudderStepper.setCurrentPosition(0);
+    Serial.println("Homing complete");
+  }
 
-  // autopilot->targetMotorPosition = map(autopilot->rudderAngle, -45, 45, -1050, -70);
-  // rudderStepper.moveTo(autopilot->targetMotorPosition);
-  // while (rudderStepper.distanceToGo() != 0) {
-  //   rudderStepper.run();
-  // }
+  calculateRudderAngle();
 
-  // // Update the current rudder position
-  // autopilot->rudderPosition = autopilot->targetMotorPosition;
+  autopilot->targetMotorPosition = map(autopilot->rudderAngle, -45, 45, -1050, -70);
+  rudderStepper.moveTo(autopilot->targetMotorPosition);
+  while (rudderStepper.distanceToGo() != 0) {
+    rudderStepper.run();
+  }
+
+  // Update the current rudder position
+  autopilot->rudderPosition = autopilot->targetMotorPosition;
 
   Serial.print("kp: ");
   Serial.println(autopilot->kp);
@@ -379,8 +380,7 @@ void loop()
   Serial.print("targetMotorPosition: ");
   Serial.println(autopilot->targetMotorPosition);
   Serial.println("==================================");
-  sendAutopilotData(autopilot);
 
   // Delay for stability (adjust as needed)
-  delay(100);  
+  delay(500);  
 }
