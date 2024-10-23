@@ -111,7 +111,7 @@ void setup() {
           
   OutputStream=&Serial;
 
-  Serial2.begin(9600, SERIAL_8N1);
+  Serial2.begin(921600, SERIAL_8N1);
 
   NMEA2000.SetDeviceCount(1);
   NMEA2000.SetProductInformation("123434", // Manufacturer's Model serial code. 
