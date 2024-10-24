@@ -67,7 +67,10 @@ void XTE(const tN2kMsg &N2kMsg);
 void COG(const tN2kMsg &N2kMsg);
 void Heading(const tN2kMsg &N2kMsg);
 
-Autopilot* autopilot = new Autopilot; 
+Autopilot* autopilot = new Autopilot;
+
+byte startMarker = 0x02;
+byte endMarker = 0x03;
 
 tNMEA2000Handler NMEA2000Handlers[]={
   {129284L,&NavigationInfo},
@@ -81,8 +84,6 @@ Stream *OutputStream;
 void HandleNMEA2000Msg(const tN2kMsg &N2kMsg);
 
 void sendAutopilotData(Autopilot* autopilot) {
-  byte startMarker = 0x02;
-  byte endMarker = 0x03;
   byte buffer[sizeof(Autopilot)];
   memcpy(buffer, autopilot, sizeof(Autopilot));
   Serial2.write(startMarker);
@@ -99,8 +100,8 @@ void SerialThread() {
 
 void setup() {
   autopilot->kp = 2.5;
-  autopilot->ki = 0.75;
-  autopilot->kd = 0.75;
+  autopilot->ki = 0.8;
+  autopilot->kd = 0.8;
   autopilot->bearingPositionToDestinationWaypoint = -1;
   autopilot->destinationLatitude = 0;
   autopilot->destinationLongitude = 0;
@@ -307,6 +308,10 @@ void calculateRudderAngle() {
   autopilot->previousDestinationLongitude = autopilot->destinationLongitude;
 }
 
+static byte buffer[sizeof(Autopilot)];
+static int bufferIndex = 0;
+bool dataStarted = false;
+
 //*****************************************************************************
 void loop() 
 { 
@@ -316,8 +321,29 @@ void loop()
   autopilot->timeDelta = (currentTime - autopilot->previousTime) / 1000.0;  // Convert ms to seconds
   autopilot->previousTime = currentTime;
 
+  if (Serial2.available()) {
+    while (Serial2.available()) {
+      byte incomingByte = Serial2.read();
+      if (incomingByte == startMarker) {  // Start marker detected
+        bufferIndex = 0;
+        dataStarted = true;
+      } else if (dataStarted && bufferIndex < sizeof(Autopilot)) {
+        buffer[bufferIndex++] = incomingByte;
+      } else if (incomingByte == endMarker && bufferIndex == sizeof(Autopilot)) {  // End marker detected
+        // Deserialize the buffer into the Autopilot struct
+        Autopilot* receivedData = (Autopilot*)buffer;
+
+        autopilot->kp = receivedData->kp;
+        autopilot->ki = receivedData->ki;
+        autopilot->kd = receivedData->kd;
+        bufferIndex = 0;
+        dataStarted = false;
+      }
+    }
+  }
+
   if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
-    Serial.println("Autopilot off: no bearing or xte");
+    // Serial.println("Autopilot off: no bearing or xte");
     // Disable motor power
     digitalWrite(4, HIGH);
     // Reset homing
