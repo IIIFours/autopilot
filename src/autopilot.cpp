@@ -28,6 +28,7 @@
 #define TFT_MOSI   11  // Data out    (SPI standard)
 #define TFT_SCLK   13  // Clock out   (SPI standard)
 #define TFT_CS     10  // chip select (SPI standard)
+#define PID_SIZE  12
 
 AccelStepper rudderStepper(AccelStepper::DRIVER, 1, 2); // (DRIVER mode, STEP_PIN, DIR_PIN)
 
@@ -56,6 +57,12 @@ typedef struct __attribute__((packed)) {
   float targetMotorPosition;
   bool homingComplete;
 } Autopilot;
+
+typedef struct __attribute__((packed)) {
+  float kp;
+  float ki;
+  float kd;
+} PIDs;
 
 typedef struct {
   unsigned long PGN;
@@ -308,7 +315,7 @@ void calculateRudderAngle() {
   autopilot->previousDestinationLongitude = autopilot->destinationLongitude;
 }
 
-static byte buffer[sizeof(Autopilot)];
+static byte buffer[PID_SIZE];
 static int bufferIndex = 0;
 bool dataStarted = false;
 
@@ -318,21 +325,19 @@ void loop()
   NMEA2000.ParseMessages();
 
   double currentTime = millis();
-  autopilot->timeDelta = (currentTime - autopilot->previousTime) / 1000.0;  // Convert ms to seconds
+  autopilot->timeDelta = (currentTime - autopilot->previousTime) / 1000.0;
   autopilot->previousTime = currentTime;
 
   if (Serial2.available()) {
     while (Serial2.available()) {
       byte incomingByte = Serial2.read();
-      if (incomingByte == startMarker) {  // Start marker detected
+      if (incomingByte == startMarker) {
         bufferIndex = 0;
         dataStarted = true;
-      } else if (dataStarted && bufferIndex < sizeof(Autopilot)) {
+      } else if (dataStarted && bufferIndex < PID_SIZE) {
         buffer[bufferIndex++] = incomingByte;
-      } else if (incomingByte == endMarker && bufferIndex == sizeof(Autopilot)) {  // End marker detected
-        // Deserialize the buffer into the Autopilot struct
-        Autopilot* receivedData = (Autopilot*)buffer;
-
+      } else if (incomingByte == endMarker && bufferIndex == PID_SIZE) {
+        PIDs* receivedData = (PIDs*)buffer;
         autopilot->kp = receivedData->kp;
         autopilot->ki = receivedData->ki;
         autopilot->kd = receivedData->kd;
