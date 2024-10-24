@@ -21,6 +21,8 @@
 #include <ST7735_t3.h> // Hardware-specific library
 #include <ST7789_t3.h> // Hardware-specific library
 
+#include <TeensyThreads.h>
+
 #define TFT_RST    14   // chip reset
 #define TFT_DC     9   // tells the display if you're sending data (D) or commands (C)   --> WR pin on TFT
 #define TFT_MOSI   11  // Data out    (SPI standard)
@@ -78,6 +80,23 @@ Stream *OutputStream;
 
 void HandleNMEA2000Msg(const tN2kMsg &N2kMsg);
 
+void sendAutopilotData(Autopilot* autopilot) {
+  byte startMarker = 0x02;
+  byte endMarker = 0x03;
+  byte buffer[sizeof(Autopilot)];
+  memcpy(buffer, autopilot, sizeof(Autopilot));
+  Serial2.write(startMarker);
+  Serial2.write(buffer, sizeof(Autopilot));
+  Serial2.write(endMarker);
+}
+
+void SerialThread() {
+  while (1) {
+    sendAutopilotData(autopilot);
+    threads.delay(1000);
+  }
+}
+
 void setup() {
   autopilot->kp = 2.5;
   autopilot->ki = 0.75;
@@ -111,7 +130,7 @@ void setup() {
           
   OutputStream=&Serial;
 
-  Serial2.begin(921600, SERIAL_8N1);
+  Serial2.begin(9600, SERIAL_8N1);
 
   NMEA2000.SetDeviceCount(1);
   NMEA2000.SetProductInformation("123434", // Manufacturer's Model serial code. 
@@ -141,6 +160,8 @@ void setup() {
   NMEA2000.SetMsgHandler(HandleNMEA2000Msg);
 //  NMEA2000.SetN2kCANMsgBufSize(2);
   NMEA2000.Open();
+
+  threads.addThread(SerialThread);
 }
 
 double radiansToDegrees(double radians) {
@@ -286,16 +307,6 @@ void calculateRudderAngle() {
   autopilot->previousDestinationLongitude = autopilot->destinationLongitude;
 }
 
-void sendAutopilotData(Autopilot* autopilot) {
-  byte startMarker = 0x02;
-  byte endMarker = 0x03;
-  byte buffer[sizeof(Autopilot)];
-  memcpy(buffer, autopilot, sizeof(Autopilot));
-  Serial2.write(startMarker);
-  Serial2.write(buffer, sizeof(Autopilot));
-  Serial2.write(endMarker);
-}
-
 //*****************************************************************************
 void loop() 
 { 
@@ -304,8 +315,6 @@ void loop()
   double currentTime = millis();
   autopilot->timeDelta = (currentTime - autopilot->previousTime) / 1000.0;  // Convert ms to seconds
   autopilot->previousTime = currentTime;
-
-  sendAutopilotData(autopilot);
 
   if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
     Serial.println("Autopilot off: no bearing or xte");
@@ -382,5 +391,5 @@ void loop()
   Serial.println("==================================");
 
   // Delay for stability (adjust as needed)
-  delay(500);  
+  delay(100);  
 }
