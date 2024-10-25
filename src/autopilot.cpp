@@ -22,6 +22,7 @@
 #include <ST7789_t3.h> // Hardware-specific library
 
 #include <TeensyThreads.h>
+#include <EEPROM.h>
 
 #define TFT_RST    14   // chip reset
 #define TFT_DC     9   // tells the display if you're sending data (D) or commands (C)   --> WR pin on TFT
@@ -58,7 +59,7 @@ typedef struct __attribute__((packed)) {
   bool homingComplete;
 } Autopilot;
 
-typedef struct __attribute__((packed)) {
+typedef struct {
   float kp;
   float ki;
   float kd;
@@ -75,6 +76,7 @@ void COG(const tN2kMsg &N2kMsg);
 void Heading(const tN2kMsg &N2kMsg);
 
 Autopilot* autopilot = new Autopilot;
+PIDs* pids = new PIDs;
 
 byte startMarker = 0x02;
 byte endMarker = 0x03;
@@ -105,10 +107,24 @@ void SerialThread() {
   }
 }
 
+void savePIDValues() {
+  EEPROM.put(0, pids->kp);
+  EEPROM.put(4, pids->ki);
+  EEPROM.put(8, pids->kd);
+}
+
+void loadPIDValues() {
+  EEPROM.get(0, pids->kp);
+  EEPROM.get(4, pids->ki);
+  EEPROM.get(8, pids->kd);
+}
+
 void setup() {
-  autopilot->kp = 2.5;
-  autopilot->ki = 0.5;
-  autopilot->kd = 2.5;
+  loadPIDValues();
+
+  autopilot->kp = pids->kp;
+  autopilot->ki = pids->ki;
+  autopilot->kd = pids->kd;
   autopilot->bearingPositionToDestinationWaypoint = -1;
   autopilot->destinationLatitude = 0;
   autopilot->destinationLongitude = 0;
@@ -337,10 +353,11 @@ void loop()
       } else if (dataStarted && bufferIndex < PID_SIZE) {
         buffer[bufferIndex++] = incomingByte;
       } else if (incomingByte == endMarker && bufferIndex == PID_SIZE) {
-        PIDs* receivedData = (PIDs*)buffer;
-        autopilot->kp = receivedData->kp;
-        autopilot->ki = receivedData->ki;
-        autopilot->kd = receivedData->kd;
+        pids = (PIDs*)buffer;
+        autopilot->kp = pids->kp;
+        autopilot->ki = pids->ki;
+        autopilot->kd = pids->kd;
+        savePIDValues();
         bufferIndex = 0;
         dataStarted = false;
       }
@@ -348,7 +365,7 @@ void loop()
   }
 
   if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
-    Serial.println("Autopilot off: no bearing or xte");
+    //Serial.println("Autopilot off: no bearing or xte");
     // Disable motor power
     digitalWrite(4, HIGH);
     // Reset homing
