@@ -121,6 +121,15 @@ void loadPIDValues() {
 
 void setup() {
   loadPIDValues();
+  if (pids->kp <= 0 || pids->kp > 10) {
+    pids->kp = 1;
+  }
+  if (pids->ki <= 0 || pids->ki > 10) {
+    pids->kp = 1;
+  }
+  if (pids->kd <= 0 || pids->kd > 10) {
+    pids->kd = 1;
+  }
 
   autopilot->kp = pids->kp;
   autopilot->ki = pids->ki;
@@ -365,7 +374,7 @@ void loop()
   }
 
   if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
-    //Serial.println("Autopilot off: no bearing or xte");
+    Serial.println("Autopilot off: no bearing or xte");
     // Disable motor power
     digitalWrite(4, HIGH);
     // Reset homing
