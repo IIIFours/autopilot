@@ -107,8 +107,8 @@ void SerialThread() {
 
 void setup() {
   autopilot->kp = 2.5;
-  autopilot->ki = 0.8;
-  autopilot->kd = 0.8;
+  autopilot->ki = 0.5;
+  autopilot->kd = 2.5;
   autopilot->bearingPositionToDestinationWaypoint = -1;
   autopilot->destinationLatitude = 0;
   autopilot->destinationLongitude = 0;
@@ -348,7 +348,7 @@ void loop()
   }
 
   if (autopilot->bearingPositionToDestinationWaypoint == -1 || autopilot->xte == -1) {
-    // Serial.println("Autopilot off: no bearing or xte");
+    Serial.println("Autopilot off: no bearing or xte");
     // Disable motor power
     digitalWrite(4, HIGH);
     // Reset homing
