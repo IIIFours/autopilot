@@ -119,6 +119,31 @@ void loadPIDValues() {
   EEPROM.get(8, pids->kd);
 }
 
+void initAutopilot(Autopilot* ap, const PIDs* pids) {
+    *ap = {
+        .kp = pids->kp,
+        .ki = pids->ki,
+        .kd = pids->kd,
+        .bearingPositionToDestinationWaypoint = -1,
+        .destinationLatitude = 0,
+        .destinationLongitude = 0,
+        .previousDestinationLatitude = 0,
+        .previousDestinationLongitude = 0,
+        .heading = -1,
+        .xte = -1,
+        .previousXte = -1,
+        .previousTime = 0,
+        .previousBearing = 0,
+        .integralXTE = 0,
+        .derivativeXTE = 0,
+        .timeDelta = 0,
+        .rudderAngle = 0,
+        .rudderPosition = 0,
+        .targetMotorPosition = 0,
+        .homingComplete = false
+    };
+}
+
 void setup() {
   loadPIDValues();
   if (pids->kp <= 0 || pids->kp > 10) {
@@ -131,26 +156,7 @@ void setup() {
     pids->kd = 1;
   }
 
-  autopilot->kp = pids->kp;
-  autopilot->ki = pids->ki;
-  autopilot->kd = pids->kd;
-  autopilot->bearingPositionToDestinationWaypoint = -1;
-  autopilot->destinationLatitude = 0;
-  autopilot->destinationLongitude = 0;
-  autopilot->previousDestinationLatitude = 0;
-  autopilot->previousDestinationLongitude = 0;
-  autopilot->heading = -1;
-  autopilot->xte = -1;
-  autopilot->previousXte = -1;
-  autopilot->previousTime = 0;
-  autopilot->previousBearing = 0;
-  autopilot->integralXTE = 0;
-  autopilot->derivativeXTE = 0;
-  autopilot->timeDelta = 0;
-  autopilot->rudderAngle = 0;
-  autopilot->rudderPosition = 0;
-  autopilot->targetMotorPosition = 0;
-  autopilot->homingComplete = false;
+  initAutopilot(autopilot, pids);
 
   rudderStepper.setMaxSpeed(1000); // Adjust based on your motor
   rudderStepper.setAcceleration(50000); // Adjust based on your motor
@@ -166,23 +172,26 @@ void setup() {
   Serial2.begin(9600, SERIAL_8N1);
 
   NMEA2000.SetDeviceCount(1);
-  NMEA2000.SetProductInformation("123434", // Manufacturer's Model serial code. 
-                                 444, // Manufacturer's product code
-                                 "3Fours Autopilot",  // Manufacturer's Model ID
-                                 "1.0.0",  // Manufacturer's Software version code
-                                 "1.0.0", // Manufacturer's Model version
-                                 0xff, // load equivalency - use default
-                                 0xffff, // NMEA 2000 version - use default
-                                 0xff, // Sertification level - use default
-                                 0
-                                 );
-  NMEA2000.SetDeviceInformation(123434, // Unique number. Use e.g. Serial number.
-                                150, // See codes on https://web.archive.org/web/20190531120557/https://www.nmea.org/Assets/20120726%20nmea%202000%20class%20&%20function%20codes%20v%202.00.pdf
-                                40, // See codes on  https://web.archive.org/web/20190531120557/https://www.nmea.org/Assets/20120726%20nmea%202000%20class%20&%20function%20codes%20v%202.00.pdf
-                                444, // Just choosen free from code list on https://web.archive.org/web/20190529161431/http://www.nmea.org/Assets/20121020%20nmea%202000%20registration%20list.pdf
-                                4, // Marine
-                                0
-                               );
+  NMEA2000.SetProductInformation(
+    "123434",     // Model serial code
+    444,          // Product code
+    "3Fours Autopilot", // Model ID
+    "1.0.0",      // Software version
+    "1.0.0",      // Model version
+    0xff,         // Load equivalency (default)
+    0xffff,       // NMEA 2000 version (default)
+    0xff,         // Certification level (default)
+    0
+  );
+
+  NMEA2000.SetDeviceInformation(
+    123434,       // Unique device ID
+    150,          // Device class
+    40,           // Device function
+    444,          // Industry group
+    4,            // Marine
+    0
+  );
    
 //  NMEA2000.SetN2kCANReceiveFrameBufSize(50);
   // Do not forward bus messages at all
@@ -255,20 +264,29 @@ void COG(const tN2kMsg &N2kMsg) {
 
 void NavigationInfo(const tN2kMsg &N2kMsg) {
     unsigned char SID;
-    double DistanceToWaypoint;
+    // Bearing information
     tN2kHeadingReference BearingReference;
-    bool PerpendicularCrossed;
-    bool ArrivalCircleEntered;
-    tN2kDistanceCalculationType CalculationType;
-    double ETATime;
-    int16_t ETADate;
     double BearingOriginToDestinationWaypoint;
     double BearingPositionToDestinationWaypoint;
+    
+    // Distance and velocity
+    double DistanceToWaypoint;
+    double WaypointClosingVelocity;
+    
+    // Waypoint details
     uint32_t OriginWaypointNumber;
     uint32_t DestinationWaypointNumber;
     double DestinationLatitude;
     double DestinationLongitude;
-    double WaypointClosingVelocity;
+    
+    // Navigation status
+    bool PerpendicularCrossed;
+    bool ArrivalCircleEntered;
+    tN2kDistanceCalculationType CalculationType;
+    
+    // ETA
+    double ETATime;
+    int16_t ETADate;
 
     if (ParseN2kNavigationInfo(N2kMsg, SID, DistanceToWaypoint, BearingReference, PerpendicularCrossed, ArrivalCircleEntered,
          CalculationType, ETATime, ETADate, BearingOriginToDestinationWaypoint, BearingPositionToDestinationWaypoint, OriginWaypointNumber, DestinationWaypointNumber, DestinationLatitude, DestinationLongitude, WaypointClosingVelocity) ) 
@@ -411,40 +429,17 @@ void loop()
   // Update the current rudder position
   autopilot->rudderPosition = autopilot->targetMotorPosition;
 
-  Serial.print("kp: ");
-  Serial.println(autopilot->kp);
-  Serial.print("ki: ");
-  Serial.println(autopilot->ki);
-  Serial.print("kd: ");
-  Serial.println(autopilot->kd);
-  Serial.print("destinationLatitude: ");
-  Serial.println(autopilot->destinationLatitude);
-  Serial.print("destinationLongitude: ");
-  Serial.println(autopilot->destinationLongitude);
-  Serial.print("bearingPositionToDestinationWaypoint: ");
-  Serial.println(autopilot->bearingPositionToDestinationWaypoint);
-  Serial.print("heading: ");
-  Serial.println(autopilot->heading);
-  Serial.print("xte: ");
-  Serial.println(autopilot->xte);
-  Serial.print("previousXte: ");
-  Serial.println(autopilot->previousXte);
-  Serial.print("previousTime: ");
-  Serial.println(autopilot->previousTime);
-  Serial.print("previousBearing: ");
-  Serial.println(autopilot->previousBearing);
-  Serial.print("integralXTE: ");
-  Serial.println(autopilot->integralXTE);
-  Serial.print("derivativeXTE: ");
-  Serial.println(autopilot->derivativeXTE);
-  Serial.print("timeDelta: ");
-  Serial.println(autopilot->timeDelta);
-  Serial.print("rudderAngle: ");
-  Serial.println(autopilot->rudderAngle);
-  Serial.print("rudderPosition: ");
-  Serial.println(autopilot->rudderPosition);
-  Serial.print("targetMotorPosition: ");
-  Serial.println(autopilot->targetMotorPosition);
+  Serial.printf("PID: kp=%.2f ki=%.2f kd=%.2f\n", autopilot->kp, autopilot->ki, autopilot->kd);
+  Serial.printf("Destination: lat=%.6f lon=%.6f bearing=%.1f\n", 
+                autopilot->destinationLatitude, autopilot->destinationLongitude,
+                autopilot->bearingPositionToDestinationWaypoint);
+  Serial.printf("Navigation: heading=%.1f xte=%.2f prevXte=%.2f\n",
+                autopilot->heading, autopilot->xte, autopilot->previousXte);
+  Serial.printf("Time: prev=%lu delta=%lu\n", autopilot->previousTime, autopilot->timeDelta);
+  Serial.printf("XTE: integral=%.2f derivative=%.2f prevBearing=%.1f\n",
+                autopilot->integralXTE, autopilot->derivativeXTE, autopilot->previousBearing);
+  Serial.printf("Rudder: angle=%.1f pos=%d target=%d\n",
+                autopilot->rudderAngle, autopilot->rudderPosition, autopilot->targetMotorPosition);
   Serial.println("==================================");
 
   // Delay for stability (adjust as needed)
