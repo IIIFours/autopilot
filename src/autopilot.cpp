@@ -23,6 +23,15 @@
 #include <ST7789_t3.h>
 #include <TeensyThreads.h>
 #include <EEPROM.h>
+#include <atomic>
+
+// Thread synchronization
+Threads::Mutex g_stateMutex;
+Threads::Mutex g_serialMutex;
+
+// Atomic variables for simple shared state
+std::atomic<int> g_bufferIndex(0);
+std::atomic<bool> g_dataStarted(false);
 
 // =============================================================================
 // CONSTANTS AND CONFIGURATION
@@ -180,8 +189,39 @@ Stream* g_outputStream = nullptr;
 
 // Serial communication buffer
 uint8_t g_serialBuffer[PID_BUFFER_SIZE];
-int g_bufferIndex = 0;
-bool g_dataStarted = false;
+
+// =============================================================================
+// THREAD-SAFE STATE ACCESS FUNCTIONS
+// =============================================================================
+
+// Thread-safe functions to access shared autopilot state
+void updateNavigationData(float heading, float xte, float bearingToWaypoint, 
+                         double destLat, double destLon) {
+    Threads::Scope lock(g_stateMutex);
+    if (heading >= 0) g_autopilotState.navigation.heading = heading;
+    if (xte != -1.0f) g_autopilotState.navigation.xte = xte;
+    if (bearingToWaypoint >= 0) g_autopilotState.navigation.bearingToWaypoint = bearingToWaypoint;
+    if (destLat != 0.0) g_autopilotState.navigation.destinationLatitude = destLat;
+    if (destLon != 0.0) g_autopilotState.navigation.destinationLongitude = destLon;
+}
+
+// Thread-safe function to update PID parameters
+void updatePIDParameters(const PIDParameters& newPID) {
+    Threads::Scope lock(g_stateMutex);
+    g_autopilotState.pid = newPID;
+}
+
+// Thread-safe function to get a copy of current autopilot state for telemetry
+AutopilotState getAutopilotStateSnapshot() {
+    Threads::Scope lock(g_stateMutex);
+    return g_autopilotState; // Return copy
+}
+
+// Thread-safe function to check if navigation data is valid
+bool isNavigationDataValid() {
+    Threads::Scope lock(g_stateMutex);
+    return g_autopilotState.navigation.isNavigationDataValid();
+}
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -294,36 +334,42 @@ void sendAutopilotData(const AutopilotState& state) {
     Serial2.write(END_MARKER);
 }
 
-void processSerialData(AutopilotState& state) {
+void processSerialData() {
+    // Thread-safe serial data processing
+    Threads::Scope lock(g_serialMutex);
+    
     while (Serial2.available()) {
         uint8_t incomingByte = Serial2.read();
         
         if (incomingByte == START_MARKER) {
-            g_bufferIndex = 0;
-            g_dataStarted = true;
-        } else if (g_dataStarted && g_bufferIndex < PID_BUFFER_SIZE) {
-            g_serialBuffer[g_bufferIndex++] = incomingByte;
-        } else if (incomingByte == END_MARKER && g_bufferIndex == PID_BUFFER_SIZE) {
+            g_bufferIndex.store(0);
+            g_dataStarted.store(true);
+        } else if (g_dataStarted.load() && g_bufferIndex.load() < static_cast<int>(PID_BUFFER_SIZE)) {
+            int currentIndex = g_bufferIndex.fetch_add(1);
+            g_serialBuffer[currentIndex] = incomingByte;
+        } else if (incomingByte == END_MARKER && g_bufferIndex.load() == static_cast<int>(PID_BUFFER_SIZE)) {
             // Parse received PID parameters
             const PIDParameters* receivedPID = reinterpret_cast<const PIDParameters*>(g_serialBuffer);
             
             if (receivedPID->isValid()) {
-                state.pid = *receivedPID;
-                savePIDParameters(state.pid);
+                updatePIDParameters(*receivedPID);
+                savePIDParameters(*receivedPID);
                 if (g_outputStream) {
                     g_outputStream->println("PID parameters updated");
                 }
             }
             
-            g_bufferIndex = 0;
-            g_dataStarted = false;
+            g_bufferIndex.store(0);
+            g_dataStarted.store(false);
         }
     }
 }
 
 void serialThread() {
     while (true) {
-        sendAutopilotData(g_autopilotState);
+        // Get a thread-safe snapshot of autopilot state for telemetry
+        AutopilotState stateSnapshot = getAutopilotStateSnapshot();
+        sendAutopilotData(stateSnapshot);
         threads.delay(SERIAL_THREAD_DELAY_MS);
     }
 }
@@ -339,11 +385,9 @@ void handleHeading(const tN2kMsg& N2kMsg) {
 
     if (ParseN2kHeading(N2kMsg, SID, heading, deviation, variation, headingReference)) {
         double headingDegrees = radiansToDegrees(heading);
-        if (headingDegrees >= MIN_VALID_HEADING && headingDegrees <= MAX_VALID_HEADING) {
-            g_autopilotState.navigation.heading = static_cast<float>(headingDegrees);
-        } else {
-            g_autopilotState.navigation.heading = -1.0f;
-        }
+        float validHeading = (headingDegrees >= MIN_VALID_HEADING && headingDegrees <= MAX_VALID_HEADING) 
+                            ? static_cast<float>(headingDegrees) : -1.0f;
+        updateNavigationData(validHeading, -1.0f, -1.0f, 0.0, 0.0);
     } else if (g_outputStream) {
         g_outputStream->print("Failed to parse Heading PGN: ");
         g_outputStream->println(N2kMsg.PGN);
@@ -357,11 +401,9 @@ void handleXTE(const tN2kMsg& N2kMsg) {
     double XTE;
 
     if (ParseN2kXTE(N2kMsg, SID, XTEMode, navigationTerminated, XTE)) {
-        if (XTE > MIN_VALID_XTE && XTE < MAX_VALID_XTE) {
-            g_autopilotState.navigation.xte = static_cast<float>(XTE);
-        } else {
-            g_autopilotState.navigation.xte = -1.0f;
-        }
+        float validXTE = (XTE > MIN_VALID_XTE && XTE < MAX_VALID_XTE) 
+                        ? static_cast<float>(XTE) : -1.0f;
+        updateNavigationData(-1.0f, validXTE, -1.0f, 0.0, 0.0);
     } else if (g_outputStream) {
         g_outputStream->print("Failed to parse XTE PGN: ");
         g_outputStream->println(N2kMsg.PGN);
@@ -375,11 +417,9 @@ void handleCOG(const tN2kMsg& N2kMsg) {
     
     if (ParseN2kPGN129026(N2kMsg, SID, headingReference, COG, SOG)) {
         double cogDegrees = radiansToDegrees(COG);
-        if (cogDegrees >= MIN_VALID_HEADING && cogDegrees <= MAX_VALID_HEADING) {
-            g_autopilotState.navigation.heading = static_cast<float>(cogDegrees);
-        } else {
-            g_autopilotState.navigation.heading = -1.0f;
-        }
+        float validHeading = (cogDegrees >= MIN_VALID_HEADING && cogDegrees <= MAX_VALID_HEADING) 
+                            ? static_cast<float>(cogDegrees) : -1.0f;
+        updateNavigationData(validHeading, -1.0f, -1.0f, 0.0, 0.0);
     }
 }
 
@@ -403,11 +443,10 @@ void handleNavigationInfo(const tN2kMsg& N2kMsg) {
         
         double bearingDegrees = radiansToDegrees(bearingPositionToDestination);
         if (bearingDegrees >= MIN_VALID_HEADING && bearingDegrees <= MAX_VALID_HEADING) {
-            g_autopilotState.navigation.bearingToWaypoint = static_cast<float>(bearingDegrees);
-            g_autopilotState.navigation.destinationLatitude = destinationLatitude;
-            g_autopilotState.navigation.destinationLongitude = destinationLongitude;
+            updateNavigationData(-1.0f, -1.0f, static_cast<float>(bearingDegrees), 
+                               destinationLatitude, destinationLongitude);
         } else {
-            g_autopilotState.navigation.bearingToWaypoint = -1.0f;
+            updateNavigationData(-1.0f, -1.0f, -1.0f, 0.0, 0.0);
         }
     } else if (g_outputStream) {
         g_outputStream->print("Failed to parse Navigation Info PGN: ");
@@ -443,8 +482,12 @@ void initializeStepperMotor() {
 }
 
 bool performHoming() {
-    if (g_autopilotState.homingComplete) {
-        return true;
+    // Thread-safe check of homing status
+    {
+        Threads::Scope lock(g_stateMutex);
+        if (g_autopilotState.homingComplete) {
+            return true;
+        }
     }
     
     rudderStepper.setCurrentPosition(0);
@@ -487,7 +530,11 @@ bool performHoming() {
         rudderStepper.run();
     }
     
-    g_autopilotState.homingComplete = true;
+    // Thread-safe update of homing status
+    {
+        Threads::Scope lock(g_stateMutex);
+        g_autopilotState.homingComplete = true;
+    }
     
     if (g_outputStream) {
         g_outputStream->printf("Homing complete - rudder centered at position %ld\n", 
@@ -721,35 +768,41 @@ void loop() {
     // Parse NMEA 2000 messages
     NMEA2000.ParseMessages();
 
-    // Update timing with protection against large jumps
+    // Update timing with protection against large jumps (thread-safe)
     uint32_t currentTime = millis();
-    if (g_autopilotState.previousTime == 0) {
-        // First run - initialize
-        g_autopilotState.previousTime = currentTime;
-        g_autopilotState.timeDelta = 0.0f;
-    } else {
-        float deltaMs = static_cast<float>(currentTime - g_autopilotState.previousTime);
-        g_autopilotState.timeDelta = deltaMs / 1000.0f;
-        
-        // Limit maximum time delta to prevent issues after pauses
-        if (g_autopilotState.timeDelta > MAX_TIME_DELTA) {
-            g_autopilotState.timeDelta = MAX_TIME_DELTA;
+    {
+        Threads::Scope lock(g_stateMutex);
+        if (g_autopilotState.previousTime == 0) {
+            // First run - initialize
+            g_autopilotState.previousTime = currentTime;
+            g_autopilotState.timeDelta = 0.0f;
+        } else {
+            float deltaMs = static_cast<float>(currentTime - g_autopilotState.previousTime);
+            g_autopilotState.timeDelta = deltaMs / 1000.0f;
+            
+            // Limit maximum time delta to prevent issues after pauses
+            if (g_autopilotState.timeDelta > MAX_TIME_DELTA) {
+                g_autopilotState.timeDelta = MAX_TIME_DELTA;
+            }
+            
+            g_autopilotState.previousTime = currentTime;
         }
-        
-        g_autopilotState.previousTime = currentTime;
     }
 
     // Process incoming serial data for PID parameter updates
-    processSerialData(g_autopilotState);
+    processSerialData();
 
-    // Check if we have valid navigation data
-    if (!g_autopilotState.navigation.isNavigationDataValid()) {
+    // Check if we have valid navigation data (thread-safe)
+    if (!isNavigationDataValid()) {
         if (g_outputStream) {
             g_outputStream->println("Autopilot off: invalid navigation data");
         }
         // Disable motor power and reset homing
         digitalWrite(MOTOR_ENABLE_PIN, HIGH);
-        g_autopilotState.homingComplete = false;
+        {
+            Threads::Scope lock(g_stateMutex);
+            g_autopilotState.homingComplete = false;
+        }
         delay(MAIN_LOOP_DELAY_MS);
         return;
     }
@@ -764,9 +817,12 @@ void loop() {
         return;
     }
 
-    // Calculate and apply rudder control
-    calculateRudderAngle(g_autopilotState);
-    updateRudderPosition(g_autopilotState);
+    // Calculate and apply rudder control (thread-safe)
+    {
+        Threads::Scope lock(g_stateMutex);
+        calculateRudderAngle(g_autopilotState);
+        updateRudderPosition(g_autopilotState);
+    }
 
     // Print system status for debugging
     // printSystemStatus(g_autopilotState);
